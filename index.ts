@@ -6,7 +6,6 @@ import makeWASocket, { DisconnectReason, AnyMessageContent, delay,  proto,
 import fs from 'fs'
 import Env from "./Env"
 import AllGroupParser from './Utils/AllGroupParser'
-import BatchSend from './Utils/BatchSend'
 import ForwardMessage from './Utils/ForwardMessage'
 
 
