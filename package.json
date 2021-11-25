@@ -9,9 +9,9 @@
     "start": "tsc && node build/index.js > log.txt",
     "dev": "tsc && node build/index.js | pino-pretty"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["whatsapp", "multidevice", "bot"],
+  "author": "jeremia49",
+  "license": "MIT",
   "dependencies": {
     "@adiwajshing/baileys-md": "git://www.github.com/adiwajshing/baileys#multi-device",
     "dotenv": "^10.0.0",
