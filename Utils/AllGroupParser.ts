@@ -8,13 +8,13 @@ class AllGroupParser{
         this.data = p1
     }
 
-    public getAllID(): Array<String>{
+    public getAllID(): Array<string>{
         return Object.keys(this.data)
     }
 
-    public getCanChat() : Array<String>{
-        const arr : Array<String> = []
-        for(let group in this.data){
+    public getCanChat() : Array<string>{
+        const arr : Array<string> = []
+        for(const group in this.data){
             if(this.data[group].announce === true) continue
             arr.push(this.data[group].id)
         }

@@ -89,6 +89,7 @@ const startSock = () => {
             const source = msg.key.remoteJid
             
             if(source === 'status@broadcast') return
+            
             console.log("Got message from : ",source,  "\nType :",Object.keys(msg.message)[0])            
 
             const msgID= msg.key.id
