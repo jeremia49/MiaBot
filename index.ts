@@ -3,14 +3,15 @@ import { Boom } from "@hapi/boom"
 import makeWASocket, { DisconnectReason, AnyMessageContent, delay,  proto, 
     MiscMessageGenerationOptions, AuthenticationState, BufferJSON, initInMemoryKeyStore, initAuthCreds,
      } from '@adiwajshing/baileys-md'
-import fs from 'fs'
+import * as fs from 'fs'
 import Env from "./Env"
 import AllGroupParser from './Utils/AllGroupParser'
-import ForwardMessage from './Utils/ForwardMessage'
+import MessageParser from './Utils/MessageParser'
+import { parseMultiDeviceID, MessageType} from './Utils/Extras' 
 
 
 const fileAuth = Env.fileAuth
-const authorizedUsers : Array<String> = JSON.parse(Env.authorizedUsers)
+const authorizedUsers : Array<string> = JSON.parse(Env.authorizedUsers)
 const prefixCommand = Env.prefixCommand
 
 console.log(fileAuth,authorizedUsers,prefixCommand)
@@ -47,19 +48,6 @@ process.on('SIGINT', function() {
     process.exit();
 });
 
-
-
-export enum MessageType{
-    TEXT_CONVERSATION = "conversation",
-    TEXT_EXTENDEDTEXTMESSAGE = "extendedTextMessage",
-    IMAGE_MESSAGE = "imageMessage",
-}
-
-const parseGroupParticipantID = (id:string)=>{
-    return id.replace( /:[0-9]+@/g , "@")
-}
-
-// start a connection
 const startSock = () => {
     
     const sock = makeWASocket({
@@ -81,43 +69,21 @@ const startSock = () => {
         if (!m) return 
         if(!m.messages[0]) return
         
-        const msg = m.messages[0]
-        if(!msg.message) return 
+        const message = m.messages[0]
+        if(!message.message) return 
 
         if(m.type === 'notify') {
             
-            const source = msg.key.remoteJid
-            
+            const source = message.key.remoteJid            
             if(source === 'status@broadcast') return
-            
-            console.log("Got message from : ",source,  "\nType :",Object.keys(msg.message)[0])            
+            console.log("Got message from : ",source,  "\nType :",Object.keys(message.message)[0])            
 
-            const msgID= msg.key.id
-            const isGroup = msg.key.remoteJid.endsWith("g.us")
-            const isPrivateChat = !isGroup
-            const sender = isGroup ? msg.key.participant  : msg.key.remoteJid
-            const isAuthorized = msg.key.fromMe || ( isGroup ? authorizedUsers.includes(parseGroupParticipantID(msg.key.participant)) : authorizedUsers.includes(msg.key.remoteJid))
-            
+            const msg = new MessageParser(sock, message,authorizedUsers)
 
-            // console.log(JSON.stringify(msg))
 
-            const type : MessageType = (()=>{
-                const type = Object.keys(msg.message)[0]
-                if(type === MessageType.TEXT_CONVERSATION) return MessageType.TEXT_CONVERSATION
-                if(type === MessageType.TEXT_EXTENDEDTEXTMESSAGE) return MessageType.TEXT_EXTENDEDTEXTMESSAGE
-                if(type === MessageType.IMAGE_MESSAGE) return MessageType.IMAGE_MESSAGE
+            if(msg.messageType===MessageType.CONVERSATION_MESSAGE || msg.messageType === MessageType.EXTENDEDTEXT_MESSAGE ){
                 
-                return undefined
-            })();
-
-
-            if(type===MessageType.TEXT_CONVERSATION || type === MessageType.TEXT_EXTENDEDTEXTMESSAGE ){
-                
-                const isQuoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage !== undefined 
-                const quoted = msg.message[Object.keys(msg.message)[0]].contextInfo
-                const quotedraw = msg.message[Object.keys(msg.message)[0]]
-                
-                const messageText = msg.message.conversation || msg.message.extendedTextMessage.text
+                const messageText = msg.extractedMessageContent.conversation || msg.extractedMessageContent.extendedTextMessage.text 
                 const messageTextLower = messageText.toLowerCase()
                 
                 let responseText = null;
@@ -126,72 +92,72 @@ const startSock = () => {
 
                 const trimmedText = messageTextLower.trim().slice(1) 
                 switch (trimmedText){
+
                     case "debug" :
-                        responseText = `Source : ${source}\nIsGroup : ${isGroup}\nisPrivateChat : ${isPrivateChat}\nsender : ${sender}\nisAuthorized : ${isAuthorized}\nTime : ${new Date()}`
-                        break
+                        responseText = `Source : ${source}\nIsGroup : ${msg.isFromGroup}\nisPrivateChat : ${msg.isFromPrivateChat}\nsender : ${msg.sender}\nisAuthorized : ${msg.isFromAuthorizedUser}\n`
+                        responseText += `hasQuote: ${msg.hasQuote}\nquote : ${JSON.stringify(msg.quoted)}\nTime : ${new Date()}`
+                        responseText += `\nSource Code : https://github.com/jeremia49/MiaBot`
+                        await msg.sendMessageWithReply({text:responseText})
+                        return
+
                     case "delete":
-                        if(!isQuoted){
+                        console.log(JSON.stringify(msg.raw));
+
+                        if(!msg.hasQuote){
                             responseText = `Silahkan quote / reply salah satu pesan yang berasal dari bot.`
                         }else{
-                            if( parseGroupParticipantID(quoted.participant) !== parseGroupParticipantID(sock.user.id)){
+                            if( parseMultiDeviceID(msg?.quoted?.participant) !== parseMultiDeviceID(sock.user.id)){
                                 responseText = `Pesan ini bukan berasal dari bot.`
                             }else{
+                                console.log(JSON.stringify(msg.contextInfo))
                                 await sock.sendMessage(source,{
                                     delete : new proto.MessageKey({
                                         remoteJid : source,
                                         fromMe : true,
-                                        id : quoted.stanzaId
+                                        id : msg.contextInfo.stanzaId
                                     })
                                 })
                             }
                         }
                         break
+                    
                     case "bc":
-                        if(!isQuoted){
-                            responseText = `Silahkan masukkan pesan dengan ${prefixCommand}bc pesan atau reply pesan yang kamu ingin broadcast`
-                        }else{
-                            if(!isAuthorized){
-                                await sendMessageWTyping(source,{text:"Unauthorized User !"},{quoted:msg})
-                                return
-                            }
-                            //broadcast
-                        }
-                        break
                     case "bcgc":
-                            if(!isQuoted){
-                                responseText = `Silahkan masukkan pesan dengan ${prefixCommand}bc pesan atau reply pesan yang kamu ingin broadcast`
-                            }else{
-                                if(!isAuthorized){
-                                    await sendMessageWTyping(source,{text:"Unauthorized User !"},{quoted:msg})
-                                    return
-                                }
-                                
-                                // const gMetaData = await sock.groupFetchAllParticipating()
-                                // const allGroup = new AllGroupParser(gMetaData).getCanChat()
-                                // await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
-                                // await ForwardMessage(sock,allGroup, {...quotedraw,disappearingMessagesInChat:false})
-                                // await sendMessageWTyping(source, {text : `Selesai ^.^` }, {quoted : msg}) 
+                        if(!msg.isFromAuthorizedUser){
+                            responseText =  msg.sendMessageWithReply({text:"Unauthorized User !"})
+                            break
+                        }
+                        if(!msg.hasQuote){
+                            responseText =  msg.sendMessageWithReply({text: `Silahkan masukkan pesan dengan ${prefixCommand}bc pesan atau reply pesan yang kamu ingin broadcast`})
+                            break
+                        }
+                        // await msg.sendMessageWithReply({text:"Hi"})
+                        // const gMetaData = await sock.groupFetchAllParticipating()
+                        // const allGroup = new AllGroupParser(gMetaData).getCanChat()
+                        // await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
+                        // await ForwardMessage(sock,allGroup, {...quotedraw,disappearingMessagesInChat:false})
+                        // await sendMessageWTyping(source, {text : `Selesai ^.^` }, {quoted : msg}) 
 
-                            }
-                            break    
+                        
+                        break    
                     default :
                         if(trimmedText.startsWith('bcgc ')){
                             
-                            if(!isAuthorized){
-                                await sendMessageWTyping(source,{text:"Unauthorized User !"},{quoted:msg})
+                            if(!msg.isFromAuthorizedUser){
+                                await msg.sendMessageWithReply({text:"Unauthorized User !"})
                                 return
                             }
 
-                            const gMetaData = await sock.groupFetchAllParticipating()
-                            const allGroup = new AllGroupParser(gMetaData).getCanChat()
-                            await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
-                            const temp = await sock.sendMessage(source,{text : messageText.split(" ").slice(1).join(' ')})
-                            await ForwardMessage(sock,allGroup, {...temp,disappearingMessagesInChat:false})
-                            await sendMessageWTyping(source, {text : `Selesai ^.^` }, {quoted : msg}) 
+                            // const gMetaData = await sock.groupFetchAllParticipating()
+                            // const allGroup = new AllGroupParser(gMetaData).getCanChat()
+                            // await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
+                            // const temp = await sock.sendMessage(source,{text : messageText.split(" ").slice(1).join(' ')})
+                            // await ForwardMessage(sock,allGroup, {...temp,disappearingMessagesInChat:false})
+                            // await sendMessageWTyping(source, {text : `Selesai ^.^` }, {quoted : msg}) 
 
                         }else if(trimmedText.startsWith('bc ')){
-                            if(!isAuthorized){
-                                await sendMessageWTyping(source,{text:"Unauthorized User !"},{quoted:msg})
+                            if(!msg.isFromAuthorizedUser){
+                                await msg.sendMessageWithReply({text:"Unauthorized User !"})
                                 return
                             }
                             // const a = await sock.groupFetchAllParticipating()
@@ -207,7 +173,8 @@ const startSock = () => {
                     await sendMessageWTyping(source,{
                         text : responseText
                     },{
-                        quoted : msg
+                        quoted : message,
+                        ephemeralExpiration:'chat',
                     })
                 }
 
