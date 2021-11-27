@@ -23,8 +23,8 @@ export default class MessageParser{
     public extractedMessageContent : WAMessageContent
     public messageType : MessageType
     public hasQuote : boolean
-    public quoted : proto.IWebMessageInfo | null
-
+    public quoted : proto.ContextInfo | null
+    public quotedMessage : proto.IMessage
     public source : string
     public msgID : string
     public sender : string
@@ -54,6 +54,8 @@ export default class MessageParser{
         
         this.hasQuote = (this.extractedMessageContent[Object.keys(this.extractedMessageContent)[0]]?.contextInfo?.quotedMessage !== null ) && (this.extractedMessageContent[Object.keys(this.extractedMessageContent)[0]]?.contextInfo?.quotedMessage !== undefined )
         this.quoted = this.hasQuote ? this.extractedMessageContent[Object.keys(this.extractedMessageContent)[0]].contextInfo : null
+        this.quotedMessage = this.hasQuote ? this.quoted.quotedMessage : null
+        console.log(JSON.stringify(this.quotedMessage))
         this.raw = this.msg
     }
 

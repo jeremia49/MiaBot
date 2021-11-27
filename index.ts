@@ -8,7 +8,7 @@ import Env from "./Env"
 import AllGroupParser from './Utils/AllGroupParser'
 import MessageParser from './Utils/MessageParser'
 import { parseMultiDeviceID, MessageType} from './Utils/Extras' 
-
+import {batchForwardMessage , batchSendMessage} from './Utils/BatchSend'
 
 const fileAuth = Env.fileAuth
 const authorizedUsers : Array<string> = JSON.parse(Env.authorizedUsers)
@@ -124,49 +124,43 @@ const startSock = () => {
                     case "bc":
                     case "bcgc":
                         if(!msg.isFromAuthorizedUser){
-                            responseText =  msg.sendMessageWithReply({text:"Unauthorized User !"})
+                            responseText =  "Unauthorized User !"
                             break
                         }
                         if(!msg.hasQuote){
-                            responseText =  msg.sendMessageWithReply({text: `Silahkan masukkan pesan dengan ${prefixCommand}bc pesan atau reply pesan yang kamu ingin broadcast`})
+                            responseText = `Silahkan masukkan pesan dengan ${prefixCommand}bc pesan atau reply pesan yang kamu ingin broadcast`
                             break
                         }
-                        // await msg.sendMessageWithReply({text:"Hi"})
-                        // const gMetaData = await sock.groupFetchAllParticipating()
-                        // const allGroup = new AllGroupParser(gMetaData).getCanChat()
-                        // await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
-                        // await ForwardMessage(sock,allGroup, {...quotedraw,disappearingMessagesInChat:false})
-                        // await sendMessageWTyping(source, {text : `Selesai ^.^` }, {quoted : msg}) 
 
+                        if(trimmedText == "bcgc"){
+                            const gMetaData = await sock.groupFetchAllParticipating()
+                            const allGroup = new AllGroupParser(gMetaData).getCanChat()
+                            await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
+                            await batchForwardMessage(sock,allGroup, {...msg.quotedMessage,disappearingMessagesInChat:false})
+                            responseText =  `Selesai ^.^` 
+                        }else{
+
+                        }
                         
                         break    
                     default :
-                        if(trimmedText.startsWith('bcgc ')){
-                            
+                        if(trimmedText.startsWith('bcgc ') || trimmedText.startsWith('bc ')){
                             if(!msg.isFromAuthorizedUser){
                                 await msg.sendMessageWithReply({text:"Unauthorized User !"})
                                 return
                             }
-
-                            // const gMetaData = await sock.groupFetchAllParticipating()
-                            // const allGroup = new AllGroupParser(gMetaData).getCanChat()
-                            // await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
-                            // const temp = await sock.sendMessage(source,{text : messageText.split(" ").slice(1).join(' ')})
-                            // await ForwardMessage(sock,allGroup, {...temp,disappearingMessagesInChat:false})
-                            // await sendMessageWTyping(source, {text : `Selesai ^.^` }, {quoted : msg}) 
-
-                        }else if(trimmedText.startsWith('bc ')){
-                            if(!msg.isFromAuthorizedUser){
-                                await msg.sendMessageWithReply({text:"Unauthorized User !"})
-                                return
+                            if(trimmedText.startsWith('bcgc ') ){
+                                const gMetaData = await sock.groupFetchAllParticipating()
+                                const allGroup = new AllGroupParser(gMetaData).getCanChat()
+                                await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
+                                await batchForwardMessage(sock,allGroup, {text:messageText.split(" ").slice(1).join(' '),disappearingMessagesInChat:false})
+                                responseText =  `Selesai ^.^`
+                            }else{
+                                // const allChat = await sock.query()
                             }
-                            // const a = await sock.groupFetchAllParticipating()
-                            // console.log(a)
-                            // await sendMessageWTyping(source, {text : JSON.stringify(a)}, {quoted : msg} ) 
-                            
+                        }else if(trimmedText.startsWith('halo')){
+                            responseText = "Halo juga kak ^^"
                         }
-                        
-                        responseText = null
                 }
                 
                 if(responseText !== null && responseText !== undefined && responseText !== ""){
