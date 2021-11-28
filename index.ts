@@ -9,8 +9,6 @@ import AllGroupParser from './Utils/AllGroupParser'
 import MessageParser from './Utils/MessageParser'
 import { parseMultiDeviceID, MessageType} from './Utils/Extras' 
 import {batchForwardMessage , batchSendMessage} from './Utils/BatchSend'
-import { connect } from "http2"
-import { group } from "console"
 
 const fileAuth = Env.fileAuth
 const authorizedUsers : Array<string> = JSON.parse(Env.authorizedUsers)
