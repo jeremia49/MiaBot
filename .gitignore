@@ -3,3 +3,4 @@ build/
 node_modules/
 log.txt
 auth_info_multi.json
+test.js

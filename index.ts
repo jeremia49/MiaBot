@@ -9,6 +9,8 @@ import AllGroupParser from './Utils/AllGroupParser'
 import MessageParser from './Utils/MessageParser'
 import { parseMultiDeviceID, MessageType} from './Utils/Extras' 
 import {batchForwardMessage , batchSendMessage} from './Utils/BatchSend'
+import { connect } from "http2"
+import { group } from "console"
 
 const fileAuth = Env.fileAuth
 const authorizedUsers : Array<string> = JSON.parse(Env.authorizedUsers)
@@ -92,7 +94,7 @@ const startSock = () => {
 
                 const trimmedText = messageTextLower.trim().slice(1) 
                 switch (trimmedText){
-
+                    
                     case "debug" :
                         responseText = `Source : ${source}\nIsGroup : ${msg.isFromGroup}\nisPrivateChat : ${msg.isFromPrivateChat}\nsender : ${msg.sender}\nisAuthorized : ${msg.isFromAuthorizedUser}\n`
                         responseText += `hasQuote: ${msg.hasQuote}\nquote : ${JSON.stringify(msg.quoted)}\nTime : ${new Date()}`
@@ -100,21 +102,40 @@ const startSock = () => {
                         await msg.sendMessageWithReply({text:responseText})
                         return
 
-                    case "delete":
-                        console.log(JSON.stringify(msg.raw));
+                    case "help" :
+                    case "menu" :
+                        responseText = `*MiaBot [Support Multi-Device]*\n`
+                        responseText += `\n- ${prefixCommand}help`
+                        responseText += `\n- ${prefixCommand}debug`
+                        responseText += `\n- ${prefixCommand}delete`
+                        responseText += `\n- ${prefixCommand}bc [Maintenance]`
+                        responseText += `\n- ${prefixCommand}bcgc`
+                        responseText += `\n- ${prefixCommand}join`
+                        responseText += `\n- ${prefixCommand}leave`
+                        responseText +=  `\n\nhttps://github.com/jeremia49/MiaBot`
+                        break
 
+                    case "leave" :
+                        if(!msg.isFromAuthorizedUser){
+                            responseText =  "Unauthorized User !"
+                        }else{
+                            await sock.groupLeave(source)
+                        }
+                        break
+                        
+                    case "delete":
                         if(!msg.hasQuote){
                             responseText = `Silahkan quote / reply salah satu pesan yang berasal dari bot.`
                         }else{
                             if( parseMultiDeviceID(msg?.quoted?.participant) !== parseMultiDeviceID(sock.user.id)){
                                 responseText = `Pesan ini bukan berasal dari bot.`
                             }else{
-                                console.log(JSON.stringify(msg.contextInfo))
+                                // console.log(JSON.stringify(msg.contextInfo))
                                 await sock.sendMessage(source,{
                                     delete : new proto.MessageKey({
                                         remoteJid : source,
                                         fromMe : true,
-                                        id : msg.contextInfo.stanzaId
+                                        id : msg.quoted.stanzaId
                                     })
                                 })
                             }
@@ -153,13 +174,30 @@ const startSock = () => {
                                 const gMetaData = await sock.groupFetchAllParticipating()
                                 const allGroup = new AllGroupParser(gMetaData).getCanChat()
                                 await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
-                                await batchForwardMessage(sock,allGroup, {text:messageText.split(" ").slice(1).join(' '),disappearingMessagesInChat:false})
+                                await batchForwardMessage(sock,allGroup, {...{conversation :messageText.split(" ").slice(1).join(' ')}, disappearingMessagesInChat: false})
                                 responseText =  `Selesai ^.^`
                             }else{
                                 // const allChat = await sock.query()
                             }
                         }else if(trimmedText.startsWith('halo')){
                             responseText = "Halo juga kak ^^"
+                        }else if(trimmedText.startsWith('join')){
+                            if(!msg.isFromAuthorizedUser){
+                                responseText =  "Unauthorized User !"
+                            }else{
+                                const grouplinks = messageText.match(/http[s]:\/\/chat.whatsapp.com\/\S+/g)
+                                if(!grouplinks){
+                                    responseText = "Pesan tidak mengandung link grup"
+                                    break
+                                }
+                                const promiseArr = []
+                                for( let link of grouplinks){
+                                    promiseArr.push(sock.groupAcceptInvite(link.split('/')[3]))
+                                }
+                                await Promise.all(promiseArr)
+                                responseText = `Berhasil memasuki ${grouplinks.length} group`
+                            }
+                            break
                         }
                 }
                 
