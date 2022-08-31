@@ -13,7 +13,8 @@
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
-    "lib": ["es2020"]
+    "lib": ["es2020"],
+    "skipLibCheck": true,
   },
   "include": ["*.ts"],
 }

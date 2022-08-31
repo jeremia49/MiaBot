@@ -1,14 +1,14 @@
 import P from "pino"
 import { Boom } from "@hapi/boom"
 import makeWASocket, { DisconnectReason, AnyMessageContent, delay,  proto, 
-    MiscMessageGenerationOptions, AuthenticationState, BufferJSON, initInMemoryKeyStore, initAuthCreds,
+    MiscMessageGenerationOptions, makeInMemoryStore, useSingleFileAuthState
      } from '@adiwajshing/baileys-md'
-import * as fs from 'fs'
 import Env from "./Env"
 import AllGroupParser from './Utils/AllGroupParser'
 import MessageParser from './Utils/MessageParser'
 import { parseMultiDeviceID, MessageType} from './Utils/Extras' 
 import {batchForwardMessage , batchSendMessage} from './Utils/BatchSend'
+
 
 const fileAuth = Env.fileAuth
 const authorizedUsers : Array<string> = JSON.parse(Env.authorizedUsers)
@@ -16,30 +16,15 @@ const prefixCommand = Env.prefixCommand
 
 console.log(fileAuth,authorizedUsers,prefixCommand)
 
-let state: AuthenticationState = undefined
-
-if(fs.existsSync(fileAuth)) {
-    const { creds, keys } = JSON.parse(
-        fs.readFileSync(fileAuth, { encoding: 'utf-8' }), 
-        BufferJSON.reviver
-    )
-    state = { 
-        creds: creds,
-        keys: initInMemoryKeyStore(keys, ()=>{}) 
-    }
-} else {
-    const creds = initAuthCreds()
-    const keys = initInMemoryKeyStore({ }, ()=>{})
-    state = { creds: creds, keys: keys }
-}
+const store = makeInMemoryStore({ logger: P().child({ level: 'debug', stream: 'store' }) })
+store.readFromFile(fileAuth)
+// save every 10s
+setInterval(() => {
+	store.writeToFile(fileAuth)
+}, 10_000)
 
 
-const saveState = () => {
-    console.log('Saving auth state ...')
-    fs.writeFileSync(
-        fileAuth, JSON.stringify(state, BufferJSON.replacer, 2) 
-    )
-}
+const { state, saveState } = useSingleFileAuthState('./auth_info_multi.json')
 
 process.on('SIGINT', function() {
     console.log("\nGracefully exit ...");
@@ -51,10 +36,18 @@ process.on('SIGINT', function() {
 const startSock = () => {
     
     const sock = makeWASocket({
-        logger: P({ level: 'error' }),
-        printQRInTerminal: true,
-        auth: state
-    })
+		logger: P({ level: 'trace' }),
+		printQRInTerminal: true,
+		auth: state,
+		// implement to handle retries
+		getMessage: async key => {
+			return {
+				conversation: 'hello'
+			}
+		}
+	})
+
+    store.bind(sock.ev)
 
     const sendMessageWTyping = async(jid: string, msg: AnyMessageContent, options : MiscMessageGenerationOptions = {}) => {
         await sock.presenceSubscribe(jid)

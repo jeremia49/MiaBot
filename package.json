@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
-    "start": "tsc && node build/index.js > log.txt",
+    "start": "tsc && node build/index.js",
     "dev": "tsc && node build/index.js --watch | pino-pretty",
     "lint": "eslint . --ext .ts"
   },
@@ -18,7 +18,8 @@
   "author": "jeremia49",
   "license": "MIT",
   "dependencies": {
-    "@adiwajshing/baileys-md": "github:adiwajshing/baileys#multi-device",
+    "@adiwajshing/baileys-md": "github:adiwajshing/baileys",
+    "@adiwajshing/keyed-db": "^0.2.4",
     "dotenv": "^10.0.0",
     "qrcode-terminal": "^0.12.0"
   },
