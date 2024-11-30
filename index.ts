@@ -1,239 +1,372 @@
-import P from "pino"
-import { Boom } from "@hapi/boom"
-import makeWASocket, { DisconnectReason, AnyMessageContent, delay,  proto, 
-    MiscMessageGenerationOptions, makeInMemoryStore, useSingleFileAuthState
-     } from '@adiwajshing/baileys-md'
+import { Boom } from '@hapi/boom'
+import NodeCache from 'node-cache'
+import makeWASocket, { AnyMessageContent, 
+    MiscMessageGenerationOptions,
+    delay, DisconnectReason, fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore, 
+    makeInMemoryStore, 
+    proto, 
+    useMultiFileAuthState, 
+    WAMessageContent, 
+    WAMessageKey 
+} from '@whiskeysockets/baileys'
+import P from 'pino'
+
+import fs from 'fs';
+
+const logger = P({ timestamp: () => `,"time":"${new Date().toJSON()}"` }, P.destination('./wa-logs.txt'))
+logger.level = 'trace'
+
 import Env from "./Env"
 import AllGroupParser from './Utils/AllGroupParser'
 import MessageParser from './Utils/MessageParser'
 import { parseMultiDeviceID, MessageType} from './Utils/Extras' 
 import {batchForwardMessage , batchSendMessage} from './Utils/BatchSend'
 
-
 const fileAuth = Env.fileAuth
 const authorizedUsers : Array<string> = JSON.parse(Env.authorizedUsers)
 const prefixCommand = Env.prefixCommand
+const selfJID = Env.selfJID
 
-console.log(fileAuth,authorizedUsers,prefixCommand)
+const msgRetryCounterCache = new NodeCache()
+const onDemandMap = new Map<string, string>()
 
-const store = makeInMemoryStore({ logger: P().child({ level: 'debug', stream: 'store' }) })
-store.readFromFile(fileAuth)
-// save every 10s
+const store = makeInMemoryStore({ logger })
+store?.readFromFile(fileAuth)
 setInterval(() => {
-	store.writeToFile(fileAuth)
+	store?.writeToFile(fileAuth)
 }, 10_000)
 
 
-const { state, saveState } = useSingleFileAuthState('./auth_info_multi.json')
+const startSock = async() => {
+	const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info')
+	const { version, isLatest } = await fetchLatestBaileysVersion()
+	console.log(`using WA v${version.join('.')}, isLatest: ${isLatest}`)
 
-process.on('SIGINT', function() {
-    console.log("\nGracefully exit ...");
-    saveState();
-    console.log("Done");
-    process.exit();
-});
-
-const startSock = () => {
-    
-    const sock = makeWASocket({
-		logger: P({ level: 'trace' }),
+	const sock = makeWASocket({
+		version,
+		logger,
 		printQRInTerminal: true,
-		auth: state,
-		// implement to handle retries
-		getMessage: async key => {
-			return {
-				conversation: 'hello'
-			}
-		}
+		auth: {
+			creds: state.creds,
+			keys: makeCacheableSignalKeyStore(state.keys, logger),
+		},
+		msgRetryCounterCache,
+		generateHighQualityLinkPreview: true,
+		getMessage,
 	})
 
-    store.bind(sock.ev)
+	store?.bind(sock.ev)
+            
 
-    const sendMessageWTyping = async(jid: string, msg: AnyMessageContent, options : MiscMessageGenerationOptions = {}) => {
+    const sendMessageWTyping = async(msg: AnyMessageContent, jid: string, options : MiscMessageGenerationOptions = {}) => {
         await sock.presenceSubscribe(jid)
-        await delay(100)
-        await sock.sendPresenceUpdate('composing', jid)
         await delay(500)
+
+        await sock.sendPresenceUpdate('composing', jid)
+        await delay(2000)
+
         await sock.sendPresenceUpdate('paused', jid)
+
         await sock.sendMessage(jid, msg, options)
     }
-    
-    sock.ev.on('messages.upsert', async (m) => {
-        if (!m) return 
-        if(!m.messages[0]) return
-        
-        const message = m.messages[0]
-        if(!message.message) return 
-
-        if(m.type === 'notify') {
-            
-            const source = message.key.remoteJid            
-            if(source === 'status@broadcast') return
-            console.log("Got message from : ",source,  "\nType :",Object.keys(message.message)[0])            
-
-            const msg = new MessageParser(sock, message,authorizedUsers)
 
 
-            if(msg.messageType===MessageType.CONVERSATION_MESSAGE || msg.messageType === MessageType.EXTENDEDTEXT_MESSAGE ){
-                
-                const messageText = msg.extractedMessageContent.conversation || msg.extractedMessageContent.extendedTextMessage.text 
-                const messageTextLower = messageText.toLowerCase()
-                
-                let responseText = null;
 
-                if (messageTextLower.trim()[0] !== prefixCommand) return
+	sock.ev.process(
+		async(events) => {
+			if(events['connection.update']) {
+				const update = events['connection.update']
+				const { connection, lastDisconnect } = update
+				if(connection === 'close') {
+					if((lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut) {
+						startSock()
+					} else {
+						console.log('Connection closed. You are logged out.')
+					}
+				}
+				
+				console.log('connection update', update)
 
-                const trimmedText = messageTextLower.trim().slice(1) 
-                switch (trimmedText){
-                    
-                    case "debug" :
-                        responseText = `Source : ${source}\nIsGroup : ${msg.isFromGroup}\nisPrivateChat : ${msg.isFromPrivateChat}\nsender : ${msg.sender}\nisAuthorized : ${msg.isFromAuthorizedUser}\n`
-                        responseText += `hasQuote: ${msg.hasQuote}\nquote : ${JSON.stringify(msg.quoted)}\nTime : ${new Date()}`
-                        responseText += `\nSource Code : https://github.com/jeremia49/MiaBot`
-                        await msg.sendMessageWithReply({text:responseText})
-                        return
+                if(connection === 'open' ){
+                    // Ready
+                }
+			}
 
-                    case "help" :
-                    case "menu" :
-                        responseText = `*MiaBot [Support Multi-Device]*\n`
-                        responseText += `\n- ${prefixCommand}help`
-                        responseText += `\n- ${prefixCommand}debug`
-                        responseText += `\n- ${prefixCommand}delete`
-                        responseText += `\n- ${prefixCommand}bc [Maintenance]`
-                        responseText += `\n- ${prefixCommand}bcgc`
-                        responseText += `\n- ${prefixCommand}join`
-                        responseText += `\n- ${prefixCommand}leave`
-                        responseText +=  `\n\nhttps://github.com/jeremia49/MiaBot`
-                        break
+			if(events['creds.update']) {
+				await saveCreds()
+			}
 
-                    case "leave" :
-                        if(!msg.isFromAuthorizedUser){
-                            responseText =  "Unauthorized User !"
-                        }else{
-                            await sock.groupLeave(source)
-                        }
-                        break
-                        
-                    case "delete":
-                        if(!msg.hasQuote){
-                            responseText = `Silahkan quote / reply salah satu pesan yang berasal dari bot.`
-                        }else{
-                            if( parseMultiDeviceID(msg?.quoted?.participant) !== parseMultiDeviceID(sock.user.id)){
-                                responseText = `Pesan ini bukan berasal dari bot.`
-                            }else{
-                                // console.log(JSON.stringify(msg.contextInfo))
-                                await sock.sendMessage(source,{
-                                    delete : new proto.MessageKey({
-                                        remoteJid : source,
-                                        fromMe : true,
-                                        id : msg.quoted.stanzaId
+			if(events['labels.association']) {
+				console.log(events['labels.association'])
+			}
+
+			if(events['labels.edit']) {
+				console.log(events['labels.edit'])
+			}
+
+			if(events.call) {
+				console.log('recv call event', events.call)
+			}
+
+			if(events['messaging-history.set']) {
+				const { chats, contacts, messages, isLatest, progress, syncType } = events['messaging-history.set']
+				if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
+					console.log('received on-demand history sync, messages=', messages)
+				}
+				console.log(`recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest}, progress: ${progress}%), type: ${syncType}`)
+			}
+
+			// received a new message
+			if(events['messages.upsert']) {
+				const upsert = events['messages.upsert']
+				console.log('recv messages ', JSON.stringify(upsert, undefined, 2))
+
+				if(upsert.type === 'notify') {
+					for (const msg of upsert.messages) {
+
+                        const source = msg.key.remoteJid
+                        if(source === 'status@broadcast') return
+
+                        const parsedMessage = new MessageParser(sock, msg,authorizedUsers)
+                        console.log("Got message from : ",source,  "\nType :",Object.keys(msg.message)[0])            
+
+
+                        if(parsedMessage.messageType===MessageType.CONVERSATION_MESSAGE || parsedMessage.messageType === MessageType.EXTENDEDTEXT_MESSAGE ){
+                            
+                            const messageText = parsedMessage.extractedMessageContent.conversation || parsedMessage.extractedMessageContent.extendedTextMessage.text 
+                            const messageTextLower = messageText.toLowerCase()
+                            
+                            let responseText = null;
+
+                            if (messageTextLower.trim()[0] !== prefixCommand) return
+
+                            const trimmedText = messageTextLower.trim().slice(1) 
+                            switch (trimmedText){
+                                case "contacts":
+                                    responseText = "Contacts : \n"
+
+                                    var contacts = Object.keys(store.contacts);
+                                    contacts = contacts.filter(contact => contact.includes('@s.whatsapp.net'));
+                                    
+                                    console.log(contacts)
+
+                                    contacts.map(function(e){
+                                        responseText += e+"\n"
                                     })
-                                })
-                            }
-                        }
-                        break
-                    
-                    case "bc":
-                    case "bcgc":
-                        if(!msg.isFromAuthorizedUser){
-                            responseText =  "Unauthorized User !"
-                            break
-                        }
-                        if(!msg.hasQuote){
-                            responseText = `Silahkan masukkan pesan dengan ${prefixCommand}bc pesan atau reply pesan yang kamu ingin broadcast`
-                            break
-                        }
 
-                        if(trimmedText == "bcgc"){
-                            const gMetaData = await sock.groupFetchAllParticipating()
-                            const allGroup = new AllGroupParser(gMetaData).getCanChat()
-                            await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
-                            await batchForwardMessage(sock,allGroup, {...msg.quotedMessage,disappearingMessagesInChat:false})
-                            responseText =  `Selesai ^.^` 
-                        }else{
-
-                        }
-                        
-                        break    
-                    default :
-                        if(trimmedText.startsWith('bcgc ') || trimmedText.startsWith('bc ')){
-                            if(!msg.isFromAuthorizedUser){
-                                await msg.sendMessageWithReply({text:"Unauthorized User !"})
-                                return
-                            }
-                            if(trimmedText.startsWith('bcgc ') ){
-                                const gMetaData = await sock.groupFetchAllParticipating()
-                                const allGroup = new AllGroupParser(gMetaData).getCanChat()
-                                await sendMessageWTyping(source, {text : `Mengirim pesan ke ${allGroup.length} grup`}) 
-                                await batchForwardMessage(sock,allGroup, {...{conversation :messageText.split(" ").slice(1).join(' ')}, disappearingMessagesInChat: false})
-                                responseText =  `Selesai ^.^`
-                            }else{
-                                // const allChat = await sock.query()
-                            }
-                        }else if(trimmedText.startsWith('halo')){
-                            responseText = "Halo juga kak ^^"
-                        }else if(trimmedText.startsWith('join')){
-                            if(!msg.isFromAuthorizedUser){
-                                responseText =  "Unauthorized User !"
-                            }else{
-                                const grouplinks = messageText.match(/http[s]:\/\/chat.whatsapp.com\/\S+/g)
-                                if(!grouplinks){
-                                    responseText = "Pesan tidak mengandung link grup"
                                     break
-                                }
-                                const promiseArr = []
-                                for( let link of grouplinks){
-                                    promiseArr.push(sock.groupAcceptInvite(link.split('/')[3]))
-                                }
-                                await Promise.all(promiseArr)
-                                responseText = `Berhasil memasuki ${grouplinks.length} group`
+                                case "video":
+                                    responseText = "Silahkan masukkan nama video"
+                                    break
+                                case "upstatus":
+                                    responseText = "Silahkan masukkan nama video"
+                                    break
+                                case "debug" :
+                                    responseText = `Source : ${source}\nIsGroup : ${parsedMessage.isFromGroup}\nisPrivateChat : ${parsedMessage.isFromPrivateChat}\nsender : ${parsedMessage.sender}\nisAuthorized : ${parsedMessage.isFromAuthorizedUser}\n`
+                                    responseText += `hasQuote: ${parsedMessage.hasQuote}\nquote : ${JSON.stringify(parsedMessage.quoted)}\nTime : ${new Date()}`
+                                    responseText += `\nSource Code : https://github.com/jeremia49/MiaBot`
+                                    await parsedMessage.sendMessageWithReply({text:responseText})
+                                    return
+
+                                case "help" :
+                                case "menu" :
+                                    responseText = `*MiaBot [Support Multi-Device]*\n`
+                                    responseText += `\n- ${prefixCommand}help`
+                                    responseText += `\n- ${prefixCommand}debug`
+                                    responseText += `\n- ${prefixCommand}delete`
+                                    responseText += `\n- ${prefixCommand}bc [Maintenance]`
+                                    responseText += `\n- ${prefixCommand}bcgc`
+                                    responseText += `\n- ${prefixCommand}join`
+                                    responseText += `\n- ${prefixCommand}leave`
+                                    responseText +=  `\n\nhttps://github.com/jeremia49/MiaBot`
+                                    break
+
+                                case "leave" :
+                                    if(!parsedMessage.isFromAuthorizedUser){
+                                        responseText =  "Unauthorized User !"
+                                    }else{
+                                        await sock.groupLeave(source)
+                                    }
+                                    break
+                                    
+                                case "delete":
+                                    if(!parsedMessage.hasQuote){
+                                        responseText = `Silahkan quote / reply salah satu pesan yang berasal dari bot.`
+                                    }else{
+                                        if( parseMultiDeviceID(parsedMessage?.quoted?.participant) !== parseMultiDeviceID(sock.user.id)){
+                                            responseText = `Pesan ini bukan berasal dari bot.`
+                                        }else{
+                                            // console.log(JSON.stringify(parsedMessage.contextInfo))
+                                            await sock.sendMessage(source,{
+                                                delete : new proto.MessageKey({
+                                                    remoteJid : source,
+                                                    fromMe : true,
+                                                    id : parsedMessage.quoted.stanzaId
+                                                })
+                                            })
+                                        }
+                                    }
+                                    break
+                                
+                                case "bc":
+                                case "bcgc":
+                                    if(!parsedMessage.isFromAuthorizedUser){
+                                        responseText =  "Unauthorized User !"
+                                        break
+                                    }
+                                    if(!parsedMessage.hasQuote){
+                                        responseText = `Silahkan masukkan pesan dengan ${prefixCommand}bc pesan atau reply pesan yang kamu ingin broadcast`
+                                        break
+                                    }
+
+                                    if(trimmedText == "bcgc"){
+                                        const gMetaData = await sock.groupFetchAllParticipating()
+                                        const allGroup = new AllGroupParser(gMetaData).getCanChat()
+                                        await sendMessageWTyping({text : `Mengirim pesan ke ${allGroup.length} grup`},source ) 
+                                        await batchForwardMessage(sock,allGroup, {...parsedMessage.quotedMessage,disappearingMessagesInChat:false})
+                                        responseText =  `Selesai ^.^` 
+                                    }else{
+
+                                    }
+                                    
+                                    break    
+                                default :
+                                    if(trimmedText.startsWith('bcgc ') || trimmedText.startsWith('bc ')){
+                                        if(!parsedMessage.isFromAuthorizedUser){
+                                            await parsedMessage.sendMessageWithReply({text:"Unauthorized User !"})
+                                            return
+                                        }
+                                        if(trimmedText.startsWith('bcgc ') ){
+                                            const gMetaData = await sock.groupFetchAllParticipating()
+                                            const allGroup = new AllGroupParser(gMetaData).getCanChat()
+                                            await sendMessageWTyping( {text : `Mengirim pesan ke ${allGroup.length} grup`},source) 
+                                            await batchForwardMessage(sock,allGroup, {...{conversation :messageText.split(" ").slice(1).join(' ')}, disappearingMessagesInChat: false})
+                                            responseText =  `Selesai ^.^`
+                                        }else{
+                                            // const allChat = await sock.query()
+                                        }
+                                        break
+                                    }else if(trimmedText.startsWith('upstatus ')){
+                                        responseText = "Ok, uploading..."
+
+                                        var contacts = Object.keys(store.contacts);
+                                        contacts = contacts.filter(contact => contact.includes('@s.whatsapp.net'));
+                                        contacts.push(selfJID);
+
+                                        var video = fs.readFileSync(messageText.split(" ").slice(1).join(' '));
+                                        await sock.sendMessage('status@broadcast',
+                                            {
+                                                video : video,
+                                                mimetype: 'video/mp4'
+                                            },
+                                            {
+                                                statusJidList: contacts,
+                                            }
+                                        )
+                                        break
+                                    }else if(trimmedText.startsWith('video ')){
+                                        var video = fs.readFileSync(messageText.split(" ").slice(1).join(' '));
+                                        parsedMessage.sendMessageWithReply(
+                                            {
+                                                video : video,
+                                                mimetype: 'video/mp4'
+                                            },
+                                        )
+                                        break
+                                    }else if(trimmedText.startsWith('halo')){
+                                        responseText = "Halo juga kak ^^"
+                                    }else if(trimmedText.startsWith('join')){
+                                        if(!parsedMessage.isFromAuthorizedUser){
+                                            responseText =  "Unauthorized User !"
+                                        }else{
+                                            const grouplinks = messageText.match(/http[s]:\/\/chat.whatsapp.com\/\S+/g)
+                                            if(!grouplinks){
+                                                responseText = "Pesan tidak mengandung link grup"
+                                                break
+                                            }
+                                            const promiseArr = []
+                                            for( let link of grouplinks){
+                                                promiseArr.push(sock.groupAcceptInvite(link.split('/')[3]))
+                                            }
+                                            await Promise.all(promiseArr)
+                                            responseText = `Berhasil memasuki ${grouplinks.length} group`
+                                        }
+                                        break
+                                    }
                             }
-                            break
+                            
+                            if(responseText !== null && responseText !== undefined && responseText !== ""){
+                                await sendMessageWTyping({
+                                    text : responseText
+                                },
+                                source,
+                                {
+                                    quoted : msg,
+                                    ephemeralExpiration:'chat',
+                                }
+                            )
+                            }
+
                         }
-                }
-                
-                if(responseText !== null && responseText !== undefined && responseText !== ""){
-                    await sendMessageWTyping(source,{
-                        text : responseText
-                    },{
-                        quoted : message,
-                        ephemeralExpiration:'chat',
-                    })
-                }
 
-            }
+                    }
+				}
+			}
 
+			// messages updated like status delivered, message deleted etc.
+			if(events['messages.update']) {
+				console.log(
+					JSON.stringify(events['messages.update'], undefined, 2)
+				)
+			}
 
-        }
-        
-    })
+			if(events['message-receipt.update']) {
+				console.log(events['message-receipt.update'])
+			}
 
-    // sock.ev.on('messages.update', m => console.log(m))
-    // sock.ev.on('presence.update', m => console.log(m))
-    // sock.ev.on('chats.update', m => console.log(m))
-    // sock.ev.on('contacts.update', m => console.log(m))
+			if(events['messages.reaction']) {
+				console.log(events['messages.reaction'])
+			}
 
-    sock.ev.on('connection.update', async (update) => {
-        console.log('connection update', update)
+			if(events['presence.update']) {
+				console.log(events['presence.update'])
+			}
 
-        const { connection, lastDisconnect } = update
-        if(connection === 'close') {
-            // reconnect if not logged out
-            if((lastDisconnect.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut) {
-                startSock()
-            } else {
-                console.log('connection closed')
-            }
-        } else if(connection === 'open') {
-            console.log('connection opened')
-        }
-        
-    })
-    
-    // listen for when the auth credentials is updated
-    sock.ev.on('creds.update', saveState)
+			if(events['chats.update']) {
+				console.log(events['chats.update'])
+			}
 
-    return sock
+			if(events['contacts.update']) {
+				for(const contact of events['contacts.update']) {
+					if(typeof contact.imgUrl !== 'undefined') {
+						const newUrl = contact.imgUrl === null
+							? null
+							: await sock!.profilePictureUrl(contact.id!).catch(() => null)
+						console.log(
+							`contact ${contact.id} has a new profile pic: ${newUrl}`,
+						)
+					}
+				}
+			}
+
+			if(events['chats.delete']) {
+				console.log('chats deleted ', events['chats.delete'])
+			}
+		}
+	)
+
+	return sock
+
+	async function getMessage(key: WAMessageKey): Promise<WAMessageContent | undefined> {
+		if(store) {
+			const msg = await store.loadMessage(key.remoteJid!, key.id!)
+			return msg?.message || undefined
+		}
+
+		// only if store is present
+		return proto.Message.fromObject({})
+	}
 }
 
 startSock()

@@ -4,3 +4,5 @@ node_modules/
 log.txt
 auth_info_multi.json
 test.js
+baileys_auth_info/
+wa-logs.txt

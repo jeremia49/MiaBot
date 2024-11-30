@@ -1,10 +1,11 @@
 import makeWASocket,{ AnyMessageContent, MiscMessageGenerationOptions, proto, WAMessageContent,
     extractMessageContent, 
-} from '@adiwajshing/baileys-md'
+} from '@whiskeysockets/baileys'
 import { parseMultiDeviceID, MessageType} from './Extras' 
 
 const parseMessageType = (msg:proto.IMessage) : MessageType | undefined =>{
-    const type = Object.keys(msg)[0]
+    const type_ = Object.keys(msg) ?? undefined
+    const type = type_[0]
     if(type === MessageType.CONVERSATION_MESSAGE) return MessageType.CONVERSATION_MESSAGE
     if(type === MessageType.EXTENDEDTEXT_MESSAGE) return MessageType.EXTENDEDTEXT_MESSAGE
     if(type === MessageType.IMAGE_MESSAGE) return MessageType.IMAGE_MESSAGE
@@ -24,7 +25,7 @@ export default class MessageParser{
     public messageType : MessageType
     public hasQuote : boolean
     public quoted : proto.ContextInfo | null
-    public quotedMessage : proto.IMessage
+    public quotedMessage : proto.IMessage  | null
     public source : string
     public msgID : string
     public sender : string
@@ -40,21 +41,21 @@ export default class MessageParser{
         this.sock = sock
 
 
-        this.extractedMessageContent = extractMessageContent(msg.message)
-        this.messageType = parseMessageType(this.extractedMessageContent)
+        this.extractedMessageContent = extractMessageContent(msg.message)!
+        this.messageType = parseMessageType(this.extractedMessageContent)!
         this.contextInfo = this.extractedMessageContent[Object.keys(this.extractedMessageContent)[0]].contextInfo
 
-        this.source = msg.key.remoteJid
-        this.msgID = msg.key.id
-        this.isFromGroup = msg.key.remoteJid.endsWith("g.us")
+        this.source = msg.key.remoteJid!
+        this.msgID = msg.key.id!
+        this.isFromGroup = msg.key.remoteJid!.endsWith("g.us")
         this.isFromPrivateChat = !this.isFromGroup 
-        this.sender = this.isFromGroup ? this.msg.key.participant : this.msg.key.remoteJid
+        this.sender = this.isFromGroup ? this.msg.key.participant! : this.msg.key.remoteJid!
         this.fromMe = parseMultiDeviceID(this.sender) === parseMultiDeviceID(this.sock.user.id)
-        this.isFromAuthorizedUser = msg.key.fromMe || ( this.isFromGroup ? authorizedUsers.includes(parseMultiDeviceID(msg.key.participant)) : authorizedUsers.includes(msg.key.remoteJid))
+        this.isFromAuthorizedUser = msg.key.fromMe || ( this.isFromGroup ? authorizedUsers.includes(parseMultiDeviceID(msg.key.participant!)!) : authorizedUsers.includes(msg.key.remoteJid!))
         
         this.hasQuote = (this.extractedMessageContent[Object.keys(this.extractedMessageContent)[0]]?.contextInfo?.quotedMessage !== null ) && (this.extractedMessageContent[Object.keys(this.extractedMessageContent)[0]]?.contextInfo?.quotedMessage !== undefined )
         this.quoted = this.hasQuote ? this.extractedMessageContent[Object.keys(this.extractedMessageContent)[0]].contextInfo : null
-        this.quotedMessage = this.hasQuote ? this.quoted.quotedMessage : null
+        this.quotedMessage = this.hasQuote ? this.quoted!.quotedMessage! : null
         this.raw = this.msg
     }
 

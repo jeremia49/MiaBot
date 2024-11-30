@@ -1,4 +1,4 @@
-import {GroupMetadata} from '@adiwajshing/baileys-md'
+import {GroupMetadata} from '@whiskeysockets/baileys'
 
 class AllGroupParser{
 

@@ -1,4 +1,4 @@
-import { AnyMessageContent, MiscMessageGenerationOptions, } from "@adiwajshing/baileys-md"
+import { AnyMessageContent, MiscMessageGenerationOptions, } from '@whiskeysockets/baileys'
 
 export const batchSendMessage = async(sock:{sendMessage}, dest:Array<string>, msg: AnyMessageContent, options : MiscMessageGenerationOptions = {})=>{
     const PromiseArr : Array<Promise<null>> = []

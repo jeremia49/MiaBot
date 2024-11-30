@@ -4,6 +4,7 @@ declare global {
         FILEAUTH: string;
         AUTHORIZED_USERS: string;
         PREFIX_COMMAND: string;
+        SELF_JID:string;
       }
     }
   }

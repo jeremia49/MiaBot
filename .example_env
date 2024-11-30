@@ -1,3 +1,4 @@
 FILEAUTH=auth_info_multi.json
 AUTHORIZED_USERS=["12345678@s.whatsapp.net"]
 PREFIX_COMMAND=#
+SELF_JID="12345678@s.whatsapp.net"
